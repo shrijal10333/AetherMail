@@ -86,7 +86,7 @@ export const MailboxProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const fetchMessages = async (mailboxId: string, isInitial = false) => {
     setIsLoadingMessages(true);
     try {
-      const list = await api.getMessages(mailboxId);
+      const list = await api.getMessages(mailboxId, mailbox?.address);
       setMessages(list);
 
       // If initial load, register all existing messages as seen so they never trigger "New message received"
@@ -148,12 +148,12 @@ export const MailboxProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setRealtimeConnected(false);
     }
 
-    // Polling provider every 7 seconds for real incoming email
+    // Polling provider every 5 seconds for real incoming email
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     pollIntervalRef.current = setInterval(async () => {
       if (!mailbox?.id) return;
       try {
-        const fresh = await api.getMessages(mailbox.id);
+        const fresh = await api.getMessages(mailbox.id, mailbox.address);
         setMessages(prev => {
           // Check for genuinely new messages
           const genuinelyNew = fresh.filter(m => !seenMessageIdsRef.current.has(m.id));
@@ -167,7 +167,7 @@ export const MailboxProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } catch {
         // Quiet poll error
       }
-    }, 7000);
+    }, 5000);
 
     return () => {
       if (eventSourceRef.current) {
@@ -178,13 +178,13 @@ export const MailboxProvider: React.FC<{ children: React.ReactNode }> = ({ child
         clearInterval(pollIntervalRef.current);
       }
     };
-  }, [mailbox?.id, playChime]);
+  }, [mailbox?.id, mailbox?.address, playChime]);
 
   const refreshMessages = async () => {
     if (!mailbox?.id) return;
     setIsCheckingNew(true);
     try {
-      const list = await api.getMessages(mailbox.id);
+      const list = await api.getMessages(mailbox.id, mailbox.address);
       setMessages(list);
       list.forEach(m => seenMessageIdsRef.current.add(m.id));
     } finally {

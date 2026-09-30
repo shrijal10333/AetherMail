@@ -24,6 +24,8 @@ export class CatchmailProvider implements EmailProvider {
     const address = `${cleanUsername}@${domain}`;
     const mailboxId = `mbx_cm_${crypto.randomBytes(8).toString('hex')}`;
 
+    console.log(`[CATCHMAIL] Created mailbox address: ${address} (id: ${mailboxId})`);
+
     return {
       id: mailboxId,
       address,
@@ -38,31 +40,60 @@ export class CatchmailProvider implements EmailProvider {
   }
 
   async getMessages(mailboxId: string, address: string): Promise<EmailMessage[]> {
+    const safeAddress = (address || '').toLowerCase().trim();
+    console.log(`[CATCHMAIL] fetching mailbox: ${safeAddress}`);
+
     try {
-      const res = await fetch(`${this.baseUrl}/api/v1/mailbox?address=${encodeURIComponent(address)}`, {
+      const res = await fetch(`${this.baseUrl}/api/v1/mailbox?address=${encodeURIComponent(safeAddress)}`, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)',
           Accept: 'application/json',
         },
-        signal: AbortSignal.timeout(6000),
+        signal: AbortSignal.timeout(8000),
       });
 
-      if (!res.ok) return [];
+      console.log(`[CATCHMAIL] status=${res.status}`);
+
+      if (res.status === 401 || res.status === 403) {
+        console.error(`[CATCHMAIL] configuration/authentication problem (HTTP ${res.status})`);
+        return [];
+      }
+      if (res.status === 404) {
+        console.warn(`[CATCHMAIL] mailbox/provider problem (HTTP 404) for ${safeAddress}`);
+        return [];
+      }
+      if (res.status === 429) {
+        console.warn(`[CATCHMAIL] rate-limit problem (HTTP 429)`);
+        return [];
+      }
+      if (res.status >= 500) {
+        console.error(`[CATCHMAIL] provider/server problem (HTTP ${res.status})`);
+        return [];
+      }
+
+      if (!res.ok) {
+        console.warn(`[CATCHMAIL] unexpected status HTTP ${res.status}`);
+        return [];
+      }
+
       const data: any = await res.json();
-      const list = data.messages || [];
+      const list = Array.isArray(data.messages) ? data.messages : [];
+
+      console.log(`[CATCHMAIL] messages=${list.length}`);
 
       return list.map((m: any) => {
-        const receivedAt = m.created_at || m.date ? new Date(m.created_at || m.date).getTime() : Date.now();
-        const sender = m.from || m.sender || 'unknown@sender.com';
-        const senderName = m.from_name || (sender.includes('@') ? sender.split('@')[0] : sender);
-        const snippet = m.snippet || m.subject || '';
+        const receivedAt = m.date || m.created_at ? new Date(m.date || m.created_at).getTime() : Date.now();
+        const rawFrom = m.from || m.sender || 'unknown@sender.com';
+        const cleanFrom = rawFrom.replace(/[<>]/g, '').trim();
+        const fromName = m.from_name || (cleanFrom.includes('@') ? cleanFrom.split('@')[0] : cleanFrom);
+        const snippet = m.subject || m.snippet || '(No Subject)';
 
         return {
           id: String(m.id),
           mailboxId,
-          from: sender,
-          fromName: senderName,
-          to: address,
+          from: cleanFrom,
+          fromName,
+          to: safeAddress,
           subject: m.subject || '(No Subject)',
           snippet,
           bodyText: snippet,
@@ -80,34 +111,60 @@ export class CatchmailProvider implements EmailProvider {
         };
       });
     } catch (err: any) {
-      console.warn('[CatchmailProvider] getMessages error:', err.message);
+      console.warn(`[CATCHMAIL] provider request error: ${err.message}`);
       return [];
     }
   }
 
   async getMessage(mailboxId: string, messageId: string, address: string): Promise<EmailMessage | null> {
+    const safeAddress = (address || '').toLowerCase().trim();
+    console.log(`[CATCHMAIL] fetching message detail: ${messageId} for ${safeAddress}`);
+
     try {
       const res = await fetch(
-        `${this.baseUrl}/api/v1/message/${encodeURIComponent(messageId)}?mailbox=${encodeURIComponent(address)}`,
+        `${this.baseUrl}/api/v1/message/${encodeURIComponent(messageId)}?mailbox=${encodeURIComponent(safeAddress)}`,
         {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)',
             Accept: 'application/json',
           },
-          signal: AbortSignal.timeout(7000),
+          signal: AbortSignal.timeout(8000),
         }
       );
+
+      console.log(`[CATCHMAIL] message detail status=${res.status}`);
+
+      if (res.status === 401 || res.status === 403) {
+        console.error(`[CATCHMAIL] configuration/authentication problem (HTTP ${res.status})`);
+        return null;
+      }
+      if (res.status === 404) {
+        console.warn(`[CATCHMAIL] message not found (HTTP 404): ${messageId}`);
+        return null;
+      }
+      if (res.status === 429) {
+        console.warn(`[CATCHMAIL] rate-limit problem (HTTP 429)`);
+        return null;
+      }
+      if (res.status >= 500) {
+        console.error(`[CATCHMAIL] provider/server problem (HTTP ${res.status})`);
+        return null;
+      }
 
       if (!res.ok) return null;
       const data: any = await res.json();
       if (!data) return null;
 
-      const receivedAt = data.created_at || data.date ? new Date(data.created_at || data.date).getTime() : Date.now();
-      const rawHtml = data.html || data.body_html || '';
-      const rawText = data.text || data.body_text || data.plain || '';
+      const receivedAt = data.date || data.created_at ? new Date(data.date || data.created_at).getTime() : Date.now();
+      
+      // Catchmail returns body inside data.body.html and data.body.text!
+      const rawHtml = data.body?.html || data.html || data.body_html || '';
+      const rawText = data.body?.text || data.text || data.body_text || data.plain || '';
       const bodyHtml = rawHtml || (rawText ? `<pre style="white-space: pre-wrap; font-family: inherit;">${rawText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>` : '<p>(No message content)</p>');
       const bodyText = rawText || (rawHtml ? rawHtml.replace(/<[^>]*>/g, '') : '');
-      const sender = data.from || data.sender || 'unknown@sender.com';
+
+      const rawFrom = data.from || data.sender || 'unknown@sender.com';
+      const cleanFrom = rawFrom.replace(/[<>]/g, '').trim();
 
       const attachments = (data.attachments || []).map((att: any, idx: number) => ({
         id: String(att.id || idx),
@@ -120,11 +177,11 @@ export class CatchmailProvider implements EmailProvider {
       return {
         id: String(data.id || messageId),
         mailboxId,
-        from: sender,
-        fromName: data.from_name || (sender.includes('@') ? sender.split('@')[0] : sender),
-        to: address,
+        from: cleanFrom,
+        fromName: data.from_name || (cleanFrom.includes('@') ? cleanFrom.split('@')[0] : cleanFrom),
+        to: safeAddress,
         subject: data.subject || '(No Subject)',
-        snippet: bodyText.slice(0, 160),
+        snippet: bodyText.slice(0, 160) || data.subject || '',
         bodyText,
         bodyHtml,
         receivedAt,
@@ -140,7 +197,7 @@ export class CatchmailProvider implements EmailProvider {
         },
       };
     } catch (err: any) {
-      console.warn('[CatchmailProvider] getMessage error:', err.message);
+      console.warn(`[CATCHMAIL] getMessage error: ${err.message}`);
       return null;
     }
   }

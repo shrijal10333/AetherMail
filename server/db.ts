@@ -482,6 +482,79 @@ export class Database {
     return mb;
   }
 
+  async getMailboxAsync(id: string): Promise<Mailbox | undefined> {
+    const memoryMb = this.mailboxes.get(id);
+    if (memoryMb) {
+      if (memoryMb.expiresAt <= Date.now() && memoryMb.status === 'CLAIMED') {
+        memoryMb.status = 'EXPIRED';
+        this.saveMailbox(memoryMb);
+      }
+      return memoryMb;
+    }
+
+    if (this.pool) {
+      try {
+        const res = await this.pool.query('SELECT * FROM mailboxes WHERE id = $1 LIMIT 1', [id]);
+        if (res.rows.length > 0) {
+          const row = res.rows[0];
+          const mb: Mailbox = {
+            id: row.id,
+            address: row.address,
+            normalizedAddress: row.normalized_address,
+            provider: row.provider,
+            domain: row.domain,
+            username: row.username,
+            createdAt: Number(row.created_at),
+            claimedAt: Number(row.claimed_at),
+            expiresAt: Number(row.expires_at),
+            ownerSessionId: row.owner_session_id,
+            ownerUserId: row.owner_user_id,
+            status: row.status,
+            messageCount: Number(row.message_count),
+            isArchived: row.is_archived,
+            customPrefix: row.custom_prefix,
+            providerData: row.provider_data,
+          };
+          this.mailboxes.set(mb.id, mb);
+          if (mb.status === 'CLAIMED') {
+            this.mailboxesByNormalizedAddress.set(mb.normalizedAddress, mb.id);
+          }
+          if (mb.expiresAt <= Date.now() && mb.status === 'CLAIMED') {
+            mb.status = 'EXPIRED';
+            this.saveMailbox(mb);
+          }
+          return mb;
+        }
+      } catch (err: any) {
+        console.error('[Database] getMailboxAsync query error:', err.message);
+      }
+    }
+
+    return undefined;
+  }
+
+  async getMailboxByAddressAsync(address: string): Promise<Mailbox | undefined> {
+    const normalized = this.normalizeAddress(address);
+    const memoryMb = this.getMailboxByAddress(address);
+    if (memoryMb) return memoryMb;
+
+    if (this.pool) {
+      try {
+        const res = await this.pool.query(
+          'SELECT * FROM mailboxes WHERE normalized_address = $1 AND status != $2 LIMIT 1',
+          [normalized, 'DELETED']
+        );
+        if (res.rows.length > 0) {
+          return this.getMailboxAsync(res.rows[0].id);
+        }
+      } catch (err: any) {
+        console.error('[Database] getMailboxByAddressAsync error:', err.message);
+      }
+    }
+
+    return undefined;
+  }
+
   getMailboxByAddress(address: string): Mailbox | undefined {
     const normalized = this.normalizeAddress(address);
     const id = this.mailboxesByNormalizedAddress.get(normalized);

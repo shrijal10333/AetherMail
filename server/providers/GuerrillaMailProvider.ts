@@ -10,7 +10,6 @@ export class GuerrillaMailProvider implements EmailProvider {
     'guerrillamailblock.com',
     'sharklasers.com',
     'guerrillamail.info',
-    'grr.la',
     'guerrillamail.biz',
     'guerrillamail.net',
     'guerrillamail.org',

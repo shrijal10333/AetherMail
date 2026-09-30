@@ -7,28 +7,115 @@ import crypto from 'crypto';
 export function createMailboxRouter(providerManager: ProviderManager) {
   const router = Router();
 
-  const getSession = (req: Request, res: Response) => {
-    let sessionId = req.cookies?.aether_session || req.headers['x-session-id'] as string;
+  const getSession = (req: Request, res?: Response) => {
+    let sessionId = req.cookies?.aether_session || (req.headers['x-session-id'] as string);
     if (!sessionId) {
       sessionId = `sess_${crypto.randomBytes(16).toString('hex')}`;
-      res.cookie('aether_session', sessionId, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 30 * 24 * 3600 * 1000,
-      });
+      if (res) {
+        res.cookie('aether_session', sessionId, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 30 * 24 * 3600 * 1000,
+        });
+      }
     }
     return db.getOrCreateSession(sessionId);
   };
 
+  const attachMailboxCookie = (res: Response, mailbox: Mailbox) => {
+    try {
+      res.cookie('aether_mb', JSON.stringify({
+        id: mailbox.id,
+        address: mailbox.address,
+        provider: mailbox.provider,
+        domain: mailbox.domain,
+        username: mailbox.username,
+        createdAt: mailbox.createdAt,
+        expiresAt: mailbox.expiresAt,
+      }), {
+        httpOnly: false,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 3600 * 1000,
+      });
+    } catch {
+      // Ignore header serialization error
+    }
+  };
+
+  // Helper to resolve mailbox across serverless lambdas or cold starts
+  const resolveMailbox = async (id: string, req: Request, res?: Response): Promise<Mailbox | null> => {
+    // 1. Try memory or PostgreSQL
+    let mb = await db.getMailboxAsync(id);
+    if (mb) return mb;
+
+    // 2. Try client-provided metadata from header or cookie (resilience for serverless statelessness)
+    const headerAddr = req.headers['x-mailbox-address'] as string;
+    const headerProvider = req.headers['x-mailbox-provider'] as string;
+    const queryAddr = req.query.address as string;
+
+    let cookieMb: any = null;
+    try {
+      if (req.cookies?.aether_mb) {
+        cookieMb = JSON.parse(req.cookies.aether_mb);
+      }
+    } catch {}
+
+    const targetAddress = headerAddr || queryAddr || (cookieMb?.id === id ? cookieMb.address : null) || (cookieMb?.address);
+    if (targetAddress && targetAddress.includes('@')) {
+      const norm = db.normalizeAddress(targetAddress);
+      const existingByAddr = await db.getMailboxByAddressAsync(norm);
+      if (existingByAddr) return existingByAddr;
+
+      const domain = norm.split('@')[1] || 'catchmail.io';
+      const username = norm.split('@')[0];
+      const provider = headerProvider || cookieMb?.provider || (domain === 'catchmail.io' ? 'catchmail' : 'mailtm');
+      const now = Date.now();
+
+      const reconstructed: Mailbox = {
+        id: id || cookieMb?.id || `mbx_rec_${crypto.randomBytes(8).toString('hex')}`,
+        address: norm,
+        normalizedAddress: norm,
+        provider,
+        domain,
+        username,
+        createdAt: cookieMb?.createdAt || now,
+        claimedAt: cookieMb?.claimedAt || now,
+        expiresAt: cookieMb?.expiresAt || now + SEVEN_DAYS_MS,
+        ownerSessionId: getSession(req, res).sessionId,
+        ownerUserId: null,
+        status: 'CLAIMED',
+        messageCount: 0,
+      };
+      db.saveMailbox(reconstructed);
+      return reconstructed;
+    }
+
+    return null;
+  };
+
   // Helper to verify mailbox ownership
-  const verifyMailboxOwnership = (mailbox: Mailbox, req: Request, res: Response): boolean => {
+  const verifyMailboxOwnership = (mailbox: Mailbox, req: Request, res?: Response): boolean => {
     const session = getSession(req, res);
     const user = session.userId ? db.users.get(session.userId) : null;
     if (user?.role === 'admin') return true;
 
     if (session.userId && mailbox.ownerUserId === session.userId) return true;
     if (mailbox.ownerSessionId === session.sessionId) return true;
+
+    // Cookie fallback for Vercel Serverless
+    if (req.cookies?.aether_mb) {
+      try {
+        const c = JSON.parse(req.cookies.aether_mb);
+        if (c.id === mailbox.id || c.address === mailbox.address) return true;
+      } catch {}
+    }
+
+    // Header fallback for Vercel Serverless
+    if (req.headers['x-mailbox-id'] === mailbox.id || req.headers['x-mailbox-address'] === mailbox.address) {
+      return true;
+    }
 
     return false;
   };
@@ -37,6 +124,20 @@ export function createMailboxRouter(providerManager: ProviderManager) {
   router.get('/active', async (req: Request, res: Response): Promise<any> => {
     const session = getSession(req, res);
     let mailbox = db.getActiveMailboxForSession(session.sessionId);
+
+    // If not found in session memory, recover from cookie or headers
+    if (!mailbox) {
+      const storedId = req.headers['x-mailbox-id'] as string;
+      const storedAddr = req.headers['x-mailbox-address'] as string;
+      if (storedId || storedAddr || req.cookies?.aether_mb) {
+        mailbox = await resolveMailbox(storedId || '', req, res);
+        if (mailbox && mailbox.expiresAt > Date.now()) {
+          session.activeMailboxId = mailbox.id;
+        } else {
+          mailbox = null;
+        }
+      }
+    }
 
     if (!mailbox) {
       try {
@@ -83,6 +184,8 @@ export function createMailboxRouter(providerManager: ProviderManager) {
       }
     }
 
+    attachMailboxCookie(res, mailbox);
+
     return res.json({
       success: true,
       mailbox,
@@ -99,7 +202,7 @@ export function createMailboxRouter(providerManager: ProviderManager) {
   // 1c. Send quick realistic test email to this mailbox
   router.post('/:id/test-email', async (req: Request, res: Response): Promise<any> => {
     const { id } = req.params;
-    const mailbox = db.getMailbox(id);
+    const mailbox = await resolveMailbox(id, req, res);
     if (!mailbox) return res.status(404).json({ success: false, error: 'Mailbox not found' });
     if (!verifyMailboxOwnership(mailbox, req, res)) {
       return res.status(403).json({ success: false, error: 'Unauthorized' });
@@ -141,7 +244,6 @@ export function createMailboxRouter(providerManager: ProviderManager) {
     return res.json({ success: true, message: testMsg });
   });
 
-
   // 2. Explicitly create "New Email"
   router.post('/new', async (req: Request, res: Response): Promise<any> => {
     const session = getSession(req, res);
@@ -166,7 +268,6 @@ export function createMailboxRouter(providerManager: ProviderManager) {
       }
     }
 
-    // Note: Old mailbox is kept in database for history until its 7-day expiration!
     try {
       const { result, providerId } = await providerManager.createMailboxWithFailover(prefix, domain);
 
@@ -204,6 +305,8 @@ export function createMailboxRouter(providerManager: ProviderManager) {
         if (user) user.activeMailboxId = mailbox.id;
       }
 
+      attachMailboxCookie(res, mailbox);
+
       return res.json({
         success: true,
         mailbox,
@@ -220,7 +323,7 @@ export function createMailboxRouter(providerManager: ProviderManager) {
   // 3. Get messages for a mailbox (Strict ownership check & read state preservation)
   router.get('/:id/messages', async (req: Request, res: Response): Promise<any> => {
     const { id } = req.params;
-    const mailbox = db.getMailbox(id);
+    const mailbox = await resolveMailbox(id, req, res);
     if (!mailbox) {
       return res.status(404).json({ success: false, error: 'Mailbox not found' });
     }
@@ -242,7 +345,7 @@ export function createMailboxRouter(providerManager: ProviderManager) {
       const existingStored = db.getMailboxStoredMessages(mailbox.id);
       const messageMap = new Map<string, EmailMessage>(existingStored.map(m => [m.id, m]));
 
-      // 2. Fetch upstream provider messages (e.g. mailtm, inboxes, guerrillamail)
+      // 2. Fetch upstream provider messages (e.g. catchmail, mailtm, inboxes, guerrillamail)
       const upstreamMessages = await provider.getMessages(mailbox.id, mailbox.address, mailbox.providerData);
 
       for (const msg of upstreamMessages) {
@@ -273,7 +376,7 @@ export function createMailboxRouter(providerManager: ProviderManager) {
   // 4. Mark message as read (Fixes the blue unread highlight bug permanently)
   router.post('/:id/messages/:messageId/read', async (req: Request, res: Response): Promise<any> => {
     const { id, messageId } = req.params;
-    const mailbox = db.getMailbox(id);
+    const mailbox = await resolveMailbox(id, req, res);
     if (!mailbox) {
       return res.status(404).json({ success: false, error: 'Mailbox not found' });
     }
@@ -289,7 +392,7 @@ export function createMailboxRouter(providerManager: ProviderManager) {
   // 5. Get specific message details (Strict ownership check & marks read)
   router.get('/:id/messages/:messageId', async (req: Request, res: Response): Promise<any> => {
     const { id, messageId } = req.params;
-    const mailbox = db.getMailbox(id);
+    const mailbox = await resolveMailbox(id, req, res);
     if (!mailbox) {
       return res.status(404).json({ success: false, error: 'Mailbox not found' });
     }
@@ -335,7 +438,7 @@ export function createMailboxRouter(providerManager: ProviderManager) {
   router.delete('/:id', async (req: Request, res: Response): Promise<any> => {
     const { id } = req.params;
     const session = getSession(req, res);
-    const mailbox = db.getMailbox(id);
+    const mailbox = await resolveMailbox(id, req, res);
     if (!mailbox) {
       return res.status(404).json({ success: false, error: 'Mailbox not found' });
     }
@@ -356,6 +459,8 @@ export function createMailboxRouter(providerManager: ProviderManager) {
     if (session.activeMailboxId === id) {
       session.activeMailboxId = null;
     }
+
+    res.clearCookie('aether_mb');
 
     return res.json({ success: true, message: 'Mailbox deleted successfully' });
   });
