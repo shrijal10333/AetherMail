@@ -177,7 +177,7 @@ export const EmailReader: React.FC<EmailReaderProps> = ({ message, onBack }) => 
                     </body>
                   </html>
                 `}
-                sandbox="allow-same-origin"
+                sandbox="allow-popups"
                 className="w-full min-h-[360px] border-0"
               />
             </div>

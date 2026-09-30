@@ -85,7 +85,7 @@ export const SeoPageTemplate: React.FC<SeoPageTemplateProps> = ({ pageKey, onGoT
       },
       {
         q: 'How long does my mailbox remain active?',
-        a: 'By default, your mailbox remains active for 60 minutes. You can easily click "Extend" on your dashboard at any time to add 60 more minutes if you are waiting on a delayed message.',
+        a: 'Every AetherMail mailbox remains reliably active for a guaranteed 7-day (168-hour) lifecycle from creation. Once the 7-day lifespan expires, the mailbox is safely retired and quarantined to prevent accidental recycling.',
       },
       {
         q: 'Can I refresh the page?',

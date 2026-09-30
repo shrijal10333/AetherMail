@@ -238,15 +238,16 @@ export function createMailboxRouter(providerManager: ProviderManager) {
 
     const provider = providerManager.getProviderInstance(mailbox.provider);
     try {
-      const upstreamMessages = await provider.getMessages(mailbox.id, mailbox.address, mailbox.providerData);
-      mailbox.messageCount = upstreamMessages.length;
+      // 1. Fetch locally and database-stored messages
+      const existingStored = db.getMailboxStoredMessages(mailbox.id);
+      const messageMap = new Map<string, EmailMessage>(existingStored.map(m => [m.id, m]));
 
-      // Merge with server-side read state
-      const mergedMessages: EmailMessage[] = [];
+      // 2. Fetch upstream provider messages (e.g. mailtm, inboxes, guerrillamail)
+      const upstreamMessages = await provider.getMessages(mailbox.id, mailbox.address, mailbox.providerData);
+
       for (const msg of upstreamMessages) {
-        // Retrieve or store message
         const stored = db.storeMessage(mailbox.id, msg);
-        mergedMessages.push(stored);
+        messageMap.set(stored.id, stored);
 
         // Only broadcast if not known before
         if (!db.knownMessageIds.has(msg.id)) {
@@ -254,13 +255,18 @@ export function createMailboxRouter(providerManager: ProviderManager) {
         }
       }
 
+      const allMessages = Array.from(messageMap.values()).sort((a, b) => b.receivedAt - a.receivedAt);
+      mailbox.messageCount = allMessages.length;
+      db.saveMailbox(mailbox);
+
       return res.json({
         success: true,
-        messages: mergedMessages.sort((a, b) => b.receivedAt - a.receivedAt),
+        messages: allMessages,
       });
     } catch (err: any) {
-      // Fallback to locally stored messages if provider error
-      return res.json({ success: true, messages: db.getMailboxStoredMessages(mailbox.id) });
+      // Fallback to locally stored messages if provider has error or timeout
+      const cached = db.getMailboxStoredMessages(mailbox.id);
+      return res.json({ success: true, messages: cached });
     }
   });
 
