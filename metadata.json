@@ -1,0 +1,6 @@
+{
+  "name": "AetherMail – Futuristic Disposable Temporary Email",
+  "description": "Instant, secure, disposable temporary email service with real-time inbox delivery, sandboxed HTML rendering, and developer API.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
