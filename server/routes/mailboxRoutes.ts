@@ -301,21 +301,33 @@ export function createMailboxRouter(providerManager: ProviderManager) {
     // Auto mark as read on open
     db.markMessageRead(mailbox.id, messageId);
 
+    // 1. Check local/database stored message first
+    const existingStored = db.getMailboxStoredMessages(mailbox.id).find(m => m.id === messageId);
+
     const provider = providerManager.getProviderInstance(mailbox.provider);
     try {
       const message = await provider.getMessage(mailbox.id, messageId, mailbox.address, mailbox.providerData);
-      if (!message) {
-        return res.status(404).json({ success: false, error: 'Message not found' });
+      if (message) {
+        message.readAt = Date.now();
+        message.isRead = true;
+        db.storeMessage(mailbox.id, message);
+        return res.json({ success: true, message });
       }
 
-      // Preserve readAt
-      message.readAt = Date.now();
-      message.isRead = true;
-      db.storeMessage(mailbox.id, message);
+      if (existingStored) {
+        existingStored.readAt = Date.now();
+        existingStored.isRead = true;
+        return res.json({ success: true, message: existingStored });
+      }
 
-      return res.json({ success: true, message });
+      return res.status(404).json({ success: false, error: 'Message not found' });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      if (existingStored) {
+        existingStored.readAt = Date.now();
+        existingStored.isRead = true;
+        return res.json({ success: true, message: existingStored });
+      }
+      return res.status(500).json({ success: false, error: 'Failed to retrieve message details' });
     }
   });
 

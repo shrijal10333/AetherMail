@@ -126,7 +126,7 @@ ${pages
   app.use('/api/admin', createAdminRouter(providerManager));
   app.use('/api/email', createWebhookRouter());
   app.use('/api/webhook', createWebhookRouter());
-  app.use('/api/cron', createCronRouter());
+  app.use('/api/cron', createCronRouter(providerManager));
 
   // Health check endpoint
   app.get('/api/health', async (_req: Request, res: Response) => {

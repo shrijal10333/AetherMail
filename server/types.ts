@@ -82,6 +82,10 @@ export interface ProviderHealth {
   providerName: string;
   activeDomain?: string;
   error?: string;
+  consecutiveFailures?: number;
+  totalSuccesses?: number;
+  totalFailures?: number;
+  inCooldown?: boolean;
 }
 
 export interface AdminMetrics {
