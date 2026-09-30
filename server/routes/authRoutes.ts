@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db.ts';
-import { User } from '../types.ts';
+import type { User } from '../types.ts';
 import crypto from 'crypto';
 
 export function createAuthRouter() {

@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { db, SEVEN_DAYS_MS } from '../db.ts';
 import { ProviderManager } from '../providers/ProviderManager.ts';
-import { Mailbox } from '../types.ts';
+import type { Mailbox } from '../types.ts';
 
 export function createApiV1Router(providerManager: ProviderManager) {
   const router = Router();

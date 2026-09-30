@@ -1,5 +1,5 @@
-import { EmailProvider, CreateMailboxResult } from './EmailProvider.ts';
-import { EmailMessage, ProviderHealth } from '../types.ts';
+import type { EmailProvider, CreateMailboxResult } from './EmailProvider.ts';
+import type { EmailMessage, ProviderHealth } from '../types.ts';
 import crypto from 'crypto';
 
 export class CustomApiProvider implements EmailProvider {

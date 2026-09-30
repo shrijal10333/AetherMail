@@ -1,4 +1,4 @@
-import { EmailMessage, ProviderHealth } from '../types.ts';
+import type { EmailMessage, ProviderHealth } from '../types.ts';
 
 export interface CreateMailboxResult {
   id: string;

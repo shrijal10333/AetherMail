@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db, SEVEN_DAYS_MS } from '../db.ts';
 import { ProviderManager } from '../providers/ProviderManager.ts';
-import { Mailbox, EmailMessage } from '../types.ts';
+import type { Mailbox, EmailMessage } from '../types.ts';
 import crypto from 'crypto';
 
 export function createMailboxRouter(providerManager: ProviderManager) {

@@ -1,10 +1,10 @@
-import { EmailProvider, CreateMailboxResult } from './EmailProvider.ts';
+import type { EmailProvider, CreateMailboxResult } from './EmailProvider.ts';
 import { MailTmProvider } from './MailTmProvider.ts';
 import { InboxesProvider } from './InboxesProvider.ts';
 import { GuerrillaMailProvider } from './GuerrillaMailProvider.ts';
 import { CustomApiProvider } from './CustomApiProvider.ts';
 import { NativeVirtualProvider } from './NativeVirtualProvider.ts';
-import { EmailMessage, ProviderHealth } from '../types.ts';
+import type { EmailMessage, ProviderHealth } from '../types.ts';
 
 export interface RegisteredProvider {
   id: string;

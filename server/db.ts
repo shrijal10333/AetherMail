@@ -1,5 +1,5 @@
-import { Mailbox, EmailMessage, User, AdminMetrics, AdminAuditLog, SystemSettings, SuspiciousActivitySummary } from './types.ts';
-import { Response } from 'express';
+import type { Mailbox, EmailMessage, User, AdminMetrics, AdminAuditLog, SystemSettings, SuspiciousActivitySummary } from './types.ts';
+import type { Response } from 'express';
 import crypto from 'crypto';
 
 interface SessionData {
